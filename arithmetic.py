@@ -1,14 +1,14 @@
 import numpy as np
 
-def add(a, b, MOD):
+def vec_add(a, b, MOD):
     assert a.shape == b.shape
     return (a + b) % MOD
 
-def sub(a, b, MOD):
+def vec_sub(a, b, MOD):
     assert a.shape == b.shape
     return (a - b) % MOD
 
-def mul(a, b, MOD):
+def vec_mul(a, b, MOD):
     assert a.shape == b.shape
     return (a * b) % MOD
 
