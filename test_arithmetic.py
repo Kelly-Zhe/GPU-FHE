@@ -4,12 +4,15 @@ import arithmetic
 import data.params_N1024_L4_P1 as N1024
 
 def test_ntt():
-    # test 1
+    # # test 1
     # a = np.zeros(1024,dtype = np.uint64)
     # a[0]=1
 
-    # test 2
-    a = np.arange(1024, dtype='uint64')
+    # # test 2
+    # a = np.arange(1024, dtype='uint64')
+
+    # test 3: check with random case
+    a = np.random.randint(low=0, high=100000, size=1024, dtype='uint64')
 
     copy_a = a
     N=1024
