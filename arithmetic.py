@@ -22,8 +22,8 @@ def vec_mul(a, b, MOD):
 def NTT(a, N, moduli, moduli_Inv, RootScalePows):
     t = N
     logt1 = int(math.log2(N)) + 1
-    q = np.uint64(moduli)  # np
-    qInv = moduli_Inv  # np
+    q = int(moduli)  # np
+    qInv = int(moduli_Inv)  # np
     m = 1
     while m < N:
         t >>= 1
@@ -39,24 +39,27 @@ def NTT(a, N, moduli, moduli_Inv, RootScalePows):
                 U0 = np.uint64(U0)
                 U1 = U >> 64
                 U1 = np.uint64(U1)
-                Q = int(U0) * int(qInv)
+                Q = int(U0) * qInv
                 Q = Q & 0xFFFFFFFFFFFFFFFF
-                Hx = int(Q) * int(q)
+                Hx = int(Q) * q
                 H = Hx >> 64
                 H = np.uint64(H)
                 if U1 < H:
-                    V = U1 + q - H
+                    V = int(U1) + q - int(H)
                     V = np.uint64(V)
                 else:
-                    V = U1 - H
+                    V = int(U1) - int(H)
                     V = np.uint64(V)
                 if a[j] < V:
-                    a[j + t] = a[j] + q - V
+                    tmp = int(a[j]) + q - int(V)
+                    a[j + t] = np.uint64(tmp)
                 else:
-                    a[j + t] = a[j] - V
-                a[j] += V
-                if a[j] > q:
-                    a[j] -= q
+                    a[j + t] = np.uint64(int(a[j]) - int(V))
+                tmp = int(a[j])+int(V)
+                if tmp > q:
+                    a[j] = np.uint64(tmp-q)
+                else:
+                    a[j] = np.uint64(tmp)
         m = m << 1
     return a
 
@@ -72,7 +75,7 @@ def iNTT(a, N, moduli, moduli_double, moduli_Inv, RootScalePowsInv, NScaleInvMod
         h = m >> 1
         for i in range(h):
             j2 = j1 + t - 1
-            W = RootScalePowsInv[h + i]
+            W = int(RootScalePowsInv[h + i])
             W = W & 0xFFFFFFFFFFFFFFFF
             for j in range(j1, j2 + 1):
                 T = a[j] + qd
