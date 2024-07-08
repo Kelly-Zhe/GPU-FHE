@@ -118,7 +118,8 @@ def iNTT(a, N, moduli, moduli_Inv, RootScalePowsInv, NScaleInvModq):
             a[i] = U1 - H
     return a
 
-def vec_int_mod(a, MOD):
+
+def vec_mod_int(a, MOD):
     N = len(a)
     c = [0] * int(N)
     for ri in range(N):
@@ -143,7 +144,15 @@ def vec_mul_scalar_int(a, scalar):
     return c
 
 
-def vec_mul_mod_scalar_int(a, scalar, MOD):
+def vec_mod(a, MOD):
+    N = len(a)
+    c = [0] * int(N)
+    for ri in range(N):
+        c[ri] = np.uint64(int(a[ri]) % int(MOD))
+    return c
+
+
+def vec_mul_scalar_mod(a, scalar, MOD):
     N = len(a)
     c = [0]*int(N)
     for ri in range(N):
@@ -174,6 +183,20 @@ def vec_sub_mod(a, b, MOD):
         c[ri] = np.uint64((int(a[ri])+ int(MOD) - int(b[ri])) % int(MOD))
     return c
 
+
+def vec_switch_modulus(input, new_modulus, old_modulus):
+    old_modulus_by_two = int(old_modulus) >> 1
+    diff = old_modulus - new_modulus if old_modulus > new_modulus else new_modulus - old_modulus
+
+    res = np.zeros(input.shape, np.uint64)
+    if new_modulus >= old_modulus:
+        tmp = [diff if n > old_modulus_by_two else 0 for n in input]
+        res[:] = [n + t for n, t in zip(input, tmp)]
+    else:  # new_modulus < old_modulus
+        tmp = [diff if n > old_modulus_by_two else 0 for n in input]
+        res[:] = vec_sub_mod(input, tmp, new_modulus)
+
+    return res
 ######################################################
 ## KS components
 ######################################################
@@ -181,7 +204,7 @@ def vec_sub_mod(a, b, MOD):
 def ModUp_Core(intt_a, d2Tilde,
                moduliQ, moduliP, QHatInvModq, QHatModp,
                curr_limbs, K, N):
-    beta = math.ceil(curr_limbs / K)  # total beta groups
+    beta = int(math.ceil(curr_limbs / K))  # total beta groups
     for j in range(beta):
         in_C_L_index = j * K
         in_C_L_len = K if j < (beta - 1) else (curr_limbs - in_C_L_index)
@@ -198,14 +221,14 @@ def ModUp_Core(intt_a, d2Tilde,
         sum = [[int(0) for _ in range(N)] for _ in range(sizeP)]
 
         for i in range(in_C_L_len):
-            tmp = vec_mul_mod_scalar_int(a[i], QHatInvModq[j][in_C_L_len - 1][i], qi[i])
+            tmp = vec_mul_scalar_mod(a[i], QHatInvModq[j][in_C_L_len - 1][i], qi[i])
             for k in range(sizeP):
                 product = vec_mul_scalar_int(tmp, QHatModp[curr_limbs - 1][j][i][k])
                 sum[k] = vec_add_int(sum[k], product)
 
         ranges = list(range(0, in_C_L_index)) + list(range(in_C_L_index + in_C_L_len, curr_limbs + K))
         for k, i in enumerate(ranges):
-            d2Tilde[j][i] = vec_int_mod(sum[k], moduliQP[k])
+            d2Tilde[j][i] = vec_mod_int(sum[k], moduliQP[k])
 
 def ModDown_Core(intt_a,
                  pHatInvModp, pHatModq, PInvModq,
@@ -216,7 +239,7 @@ def ModDown_Core(intt_a,
     tmp3 = np.zeros((K, N), dtype=np.uint64)
     tmpk = intt_a[curr_limbs:, :]
     for k in range(K):
-        tmp3[k] = vec_mul_mod_scalar_int(tmpk[k], pHatInvModp[k], moduliP[k])
+        tmp3[k] = vec_mul_scalar_mod(tmpk[k], pHatInvModp[k], moduliP[k])
 
     tmpi = intt_a[:curr_limbs, :]
     for i in range(curr_limbs):
@@ -225,8 +248,8 @@ def ModDown_Core(intt_a,
             product = vec_mul_scalar_int(tmp3[k], pHatModq[k][i])
             sum = vec_add_int(sum, product)
 
-        res[i] = vec_int_mod(sum, moduliQ[i])
+        res[i] = vec_mod_int(sum, moduliQ[i])
         res[i] = vec_sub_mod(tmpi[i], res[i], moduliQ[i])
-        res[i] = vec_mul_mod_scalar_int(res[i], PInvModq[i], moduliQ[i])
+        res[i] = vec_mul_scalar_mod(res[i], PInvModq[i], moduliQ[i])
 
     return res
