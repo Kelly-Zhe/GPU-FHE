@@ -597,3 +597,8 @@ def test_ModReduce_ct():
     print("\nres_bx result: ")
     print(compare)
     print("\n")
+
+if __name__ == "__main__":
+    # test_KS_ModDown2()
+    test_KS_components()
+    # test_ModReduce_ct()
