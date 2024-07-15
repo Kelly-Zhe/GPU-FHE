@@ -2,6 +2,10 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cassert>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "kernels.h"
 
 __device__ void vec_mul_scalar_mod(uint64_t* vec, uint64_t scalar, uint64_t mod, int N, uint64_t* result) {
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -69,7 +73,7 @@ __global__ void modup_core_kernel(
     }
 }
 
-void modup_core(
+void modup_core_cuda(
         uint64_t* h_intt_a, uint64_t* h_d2Tilde,
         uint64_t* h_moduliQ, uint64_t* h_moduliP, uint64_t* h_QHatInvModq, uint64_t* h_QHatModp,
         int curr_limbs, int K, int N) {
@@ -137,7 +141,7 @@ int main() {
     // ...
 
     // 调用modup_core函数
-    modup_core(h_intt_a, h_d2Tilde, h_moduliQ, h_moduliP, h_QHatInvModq, h_QHatModp, curr_limbs, K, N);
+    modup_core_cuda(h_intt_a, h_d2Tilde, h_moduliQ, h_moduliP, h_QHatInvModq, h_QHatModp, curr_limbs, K, N);
 
     // 打印结果或进一步处理
     // ...
