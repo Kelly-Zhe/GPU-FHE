@@ -1,12 +1,14 @@
 #include <iostream>
 #include <cuda_runtime.h>
-#include<cmath>
+#include <cmath>
 
 struct uint128_t {
     uint64_t hi;
     uint64_t lo;
-    __device__ uint128_t& operator+=(const uint128_t& op);
+
+    __device__ uint128_t &operator+=(const uint128_t &op);
 };
+
 // https://forums.developer.nvidia.com/t/long-integer-multiplication-mul-wide-u64-and-mul-wide-u128/51520
 __inline__ __device__ uint128_t mult_64_64_128(const uint64_t op1,
                                                const uint64_t op2) {
@@ -42,18 +44,19 @@ __inline__ __device__ uint128_t mult_64_64_128(const uint64_t op1,
 }
 
 __inline__ __device__ void inplace_add_128_128(const uint128_t op1,
-                                               uint128_t& res) {
+                                               uint128_t &res) {
     asm("add.cc.u64 %1, %3, %1;\n\t"
         "addc.cc.u64 %0, %2, %0;\n\t"
             : "+l"(res.hi), "+l"(res.lo)
             : "l"(op1.hi), "l"(op1.lo));
 }
 
-__inline__ __device__ void mod_128_64(const uint128_t op1, uint64_t mod){
-    return ((op1.hi % mod) << 64 | op1.lo) % mod;
+__inline__ __device__ uint64_t mod_128_64(const uint128_t op1, uint64_t mod) {
+    // return ((op1.hi % mod) << 64 | op1.lo) % mod;
+    return op1.lo % mod;
 }
 
-void mul_mod(uint64_t &r, uint64_t a, uint64_t b, uint64_t m) {
+__inline__ __device__ void mul_mod(uint64_t &r, uint64_t a, uint64_t b, uint64_t m) {
     unsigned __int128 mul = static_cast<unsigned __int128>(a) * b;
     mul %= static_cast<unsigned __int128>(m);
     r = static_cast<uint64_t>(mul);
@@ -70,86 +73,92 @@ __device__ __forceinline__ uint64_t sub_mod(uint64_t a, uint64_t b,
     return a >= b ? a - b : a + mod - b;
 }
 
+__global__ void
+constMulMod_kernel(size_t K, size_t N, uint64_t *in, uint64_t *pHatInvModp, uint64_t *moduliP, uint64_t *out) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = tid % N;
 
-
-__global__ void constMulMod_kernel(size_t K, size_t N, uint64_t *in, uint64_t *pHatInvModp, uint64_t *moduliP, uint64_t *out){
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    for(int k=0;k<K;k++){
-        mul_mod(out[k*N+i],in[k*N+i],pHatInvModp[k], moduliP[k]);
+    for (int k = 0; k < K; k++) {
+        mul_mod(out[k * N + i], in[k * N + i], pHatInvModp[k], moduliP[k]);
     }
+    // printf("%d, %lld, %lld\n", i, in[tid], out[tid]);
 }
 
-void constMulMod(size_t K, size_t N, size_t curr_limbs, uint64_t *in, uint64_t *pHatInvModp, uint64_t *moduliP, uint64_t *out){
+void constMulMod(size_t K, size_t N, size_t curr_limbs, uint64_t *intt_a, uint64_t *pHatInvModp, uint64_t *moduliP,
+                 uint64_t *tmp3) {
     const int block_dim = 256;
     const int grid_dim = K * N / block_dim;
-    constMulMod_kernel<<<grid_dim, block_dim>>>(K,N,in, pHatInvModp,moduliP,out);
+    uint64_t *tmpk = intt_a + curr_limbs * N;
+    constMulMod_kernel<<<grid_dim, block_dim>>>(K, N, tmpk, pHatInvModp, moduliP, tmp3);
 }
 
-
-__global__ void ModDownKernel(uint64_t *intt_a, uint64_t *tmp3,uint64_t *tmpi,
-                              const uint64_t *pHatInvModp, const uint64_t *pHatModq,
-                              const uint64_t *PInvModq, const uint64_t *moduliQ,
-                              const uint64_t *moduliP,
-                              int curr_limbs, int K, const int N) {
+__global__ void moddown_core_kernel(uint64_t *intt_a, uint64_t *tmp3,
+                                    const uint64_t *pHatInvModp, const uint64_t *pHatModq,
+                                    const uint64_t *PInvModq, const uint64_t *moduliQ,
+                                    const uint64_t *moduliP,
+                                    int curr_limbs, int K, const int N, uint64_t *res) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int row = idx/N;
-    int col = idx%N;
+    int i = idx / N;
+    int col = idx % N;
 
-    for (int i = 0; i < curr_limbs; ++i) {
-        uint128_t sum[N] = {0};
-        for (int k = 0; k < K; ++k) {
-            uint128_t product = mult_64_64_128(&tmp3[k * N+col], pHatModq[k * curr_limbs + i]);
-            inplace_add_128_128(product, sum[col]);
-        }
-
-        res[i * N + col] = mod_128_64(sum[col], moduliQ[i]); //这里其实需要用barret算法
-        res[i * N + col] = sub_mod(&tmpi[i * N+col], &res[i * N+col], moduliQ[i]);
-        mul_mod(&res[i * N+ col], &res[i * N+col], PInvModq[i], moduliQ[i]);
+    uint128_t sum[256] = {0};
+    for (int k = 0; k < K; ++k) {
+        uint128_t product = mult_64_64_128(tmp3[k * N + col], pHatModq[k * curr_limbs + i]);
+        inplace_add_128_128(product, sum[col]);
     }
+
+    res[i * N + col] = mod_128_64(sum[col], moduliQ[i]); // 这里其实需要用barret算法
+
+    res[i * N + col] = sub_mod(intt_a[i * N + col], res[i * N + col], moduliQ[i]);
+
+    mul_mod(res[i * N + col], res[i * N + col], PInvModq[i], moduliQ[i]);
+    // printf("%d, %lld\n", idx, res[i * N + col]);
 }
 
 void moddown_core_cuda(
-        uint64_t* h_intt_a, uint64_t* h_pHatInvModp, uint64_t* h_pHatModq, uint64_t* h_PInvModq,
-        uint64_t* h_moduliQ, uint64_t* h_moduliP,
-        uint64_t* h_res, int N, int curr_limbs, int K) {
+        uint64_t *h_intt_a, uint64_t *h_pHatInvModp, uint64_t *h_pHatModq, uint64_t *h_PInvModq,
+        uint64_t *h_moduliQ, uint64_t *h_moduliP,
+        uint64_t *h_res, int N, int curr_limbs, int K) {
 
-    uint64_t* d_intt_a;
-    uint64_t* d_pHatInvModp;
-    uint64_t* d_pHatModq;
-    uint64_t* d_PInvModq;
-    uint64_t* d_moduliQ;
-    uint64_t* d_moduliP;
-    uint64_t* d_res;
+    uint64_t *d_intt_a;
+    uint64_t *d_pHatInvModp;
+    uint64_t *d_pHatModq;
+    uint64_t *d_PInvModq;
+    uint64_t *d_moduliQ;
+    uint64_t *d_moduliP;
+    uint64_t *d_res;
+    uint64_t *d_tmp3;
 
-// 分配设备内存
-    cudaMalloc(&d_intt_a, N * curr_limbs * sizeof(uint64_t));
+    // 分配设备内存
+    cudaMalloc(&d_intt_a, N * (K + curr_limbs) * sizeof(uint64_t));
     cudaMalloc(&d_pHatInvModp, K * sizeof(uint64_t));
     cudaMalloc(&d_pHatModq, K * curr_limbs * sizeof(uint64_t));
     cudaMalloc(&d_PInvModq, curr_limbs * sizeof(uint64_t));
     cudaMalloc(&d_moduliQ, curr_limbs * sizeof(uint64_t));
     cudaMalloc(&d_moduliP, K * sizeof(uint64_t));
+    cudaMalloc(&d_tmp3, K * N * sizeof(uint64_t));
+    cudaMalloc(&d_res, curr_limbs * N * sizeof(uint64_t));
 
-// 将输入数据从主机传输到设备
-    cudaMemcpy(d_intt_a, intt_a, N * curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_pHatInvModp, pHatInvModp, K * sizeof(uint64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_pHatModq, pHatModq, K * curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_PInvModq, PInvModq, curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_moduliQ, moduliQ, curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_moduliP, moduliP, K * sizeof(uint64_t), cudaMemcpyHostToDevice);
-// 设置CUDA内核的执行配置
+    // 将输入数据从主机传输到设备
+    cudaMemcpy(d_intt_a, h_intt_a, N * (K + curr_limbs) * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_pHatInvModp, h_pHatInvModp, K * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_pHatModq, h_pHatModq, K * curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_PInvModq, h_PInvModq, curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_moduliQ, h_moduliQ, curr_limbs * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_moduliP, h_moduliP, K * sizeof(uint64_t), cudaMemcpyHostToDevice);
+
+    constMulMod(K, N, curr_limbs, d_intt_a, d_pHatInvModp, d_moduliP, d_tmp3);
+
     int blockSize = 256;
-    int numBlocks = (N * (K+curr_limbs) + blockSize - 1) / blockSize;
-    // size_t shared_memory_size = (3*N*(K+curr_limbs)) * sizeof(uint64_t);
-
-// 启动CUDA内核
+    int numBlocks = (N * curr_limbs + blockSize - 1) / blockSize;
     moddown_core_kernel<<<numBlocks, blockSize>>>(
-            d_intt_a, d_pHatInvModp, d_pHatModq, d_PInvModq,
-            d_moduliQ, d_moduliP, d_res, N, curr_limbs, K);
+            d_intt_a, d_tmp3, d_pHatInvModp, d_pHatModq, d_PInvModq,
+            d_moduliQ, d_moduliP, curr_limbs, K, N, d_res);
 
-// 将结果从设备传回主机
+    // 将结果从设备传回主机
     cudaMemcpy(h_res, d_res, curr_limbs * N * sizeof(uint64_t), cudaMemcpyDeviceToHost);
 
-// 释放设备内存
+    // 释放设备内存
     cudaFree(d_intt_a);
     cudaFree(d_pHatInvModp);
     cudaFree(d_pHatModq);
@@ -160,34 +169,29 @@ void moddown_core_cuda(
 }
 
 int main() {
-// 示例输入数据和参数
+    // 示例输入数据和参数
     const int N = 256;
     const int curr_limbs = 4;
     const int K = 1;
 
     uint64_t h_intt_a[(curr_limbs + K) * N];
-    uint64_t h_pHatInvModp[K * (curr_limbs+K)] ={1,1,1,1,1};
-    uint64_t h_pHatModq[K * (curr_limbs+K)] = {1,1,1,1,0};
-    uint64_t h_PInvModq[curr_limbs + K] = {8309272629270236,399822410100,3503288382006841,8796093022179,0};
-    uint64_t h_moduliQ[curr_limbs + K]{9007199254746113,4503599627366401,4503599627364353,4503599627355649,0};
-    uint64_t h_moduliP[K * (curr_limbs+K)] {4503599627355137,4503599627355137,4503599627355137,4503599627355137,4503599627355137};
-    uint64_t *h_res = (uint64_t*)malloc(sizeof(int64_t) * ((curr_limbs+K) * N));
-    for(int i =0; i<(curr_limbs+K)*N;i++){
+    uint64_t h_pHatInvModp[K * (curr_limbs)] = {1, 1, 1, 1};
+    uint64_t h_pHatModq[K * (curr_limbs)] = {1, 1, 1, 1};
+    uint64_t h_PInvModq[curr_limbs] = {8309272629270236, 399822410100, 3503288382006841, 8796093022179};
+    uint64_t h_moduliQ[curr_limbs]{9007199254746113, 4503599627366401, 4503599627364353, 4503599627355649};
+    uint64_t h_moduliP[K * (curr_limbs)]{4503599627355137, 4503599627355137, 4503599627355137, 4503599627355137};
+    uint64_t *h_res = (uint64_t *) malloc(sizeof(int64_t) * ((curr_limbs + K) * N));
+    for (int i = 0; i < (curr_limbs + K) * N; i++) {
         h_intt_a[i] = 8309272629270236;
-
-        // h_intt_a[i] = (rand()<<30) + (rand()<<15)+rand();
     }
 
-// 初始化输入数据
-// ...
-
-// 调用moddown_core函数
+    // 调用moddown_core函数
     moddown_core_cuda(h_intt_a, h_pHatInvModp, h_pHatModq, h_PInvModq,
                       h_moduliQ, h_moduliP, h_res, N, curr_limbs, K);
 
-// 打印结果或进一步处理
-    for(int i = 0;i <curr_limbs * N;i++){
-        // std::cout<<i<<":"<<h_res[i] <<", ";
+    // 打印结果或进一步处理
+    for (int i = 0; i < curr_limbs * N; i++) {
+        std::cout << i << ":" << h_res[i] << ", ";
     }
 
     return 0;
